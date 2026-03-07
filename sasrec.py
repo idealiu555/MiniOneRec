@@ -16,9 +16,10 @@ import random
 import json
 import copy
 import ast
-import wandb
+import swanlab
 
 logging.getLogger().setLevel(logging.INFO)
+SWANLAB_ENABLED = False
 
         
 
@@ -381,10 +382,11 @@ def evaluate_games(model, test_data, device, topk, save_logits=False, eval_type=
         if eval_type == "test":
             str1 += 'hr@{}\tndcg@{}\t'.format(topk[i], topk[i])
             str2 += '{:.6f}\t{:.6f}\t'.format(hr_list[i], ndcg_list[i])
-            wandb.log({
-            f'Recall@{topk[i]}': hr_list[i],
-            f'NDCG@{topk[i]}': ndcg_list[i]
-            })
+            if SWANLAB_ENABLED:
+                swanlab.log({
+                    f"Recall@{topk[i]}": hr_list[i],
+                    f"NDCG@{topk[i]}": ndcg_list[i],
+                })
 
     print(str1)
     print(str2)
@@ -392,7 +394,8 @@ def evaluate_games(model, test_data, device, topk, save_logits=False, eval_type=
     if eval_type == "test":
         metrics_dict = {f'HR@{topk[i]}': hr_list[i] for i in range(len(topk))}
         metrics_dict.update({f'NDCG@{topk[i]}': ndcg_list[i] for i in range(len(topk))})
-        wandb.log(metrics_dict)
+        if SWANLAB_ENABLED:
+            swanlab.log(metrics_dict)
 
 
     return ndcg_last, hr_list, ndcg_list
@@ -426,13 +429,17 @@ class RecDataset(Dataset):
         return len(self.data)
 
 def main(topk, data_file_train, data_file_test, data_file_valid):
+    global SWANLAB_ENABLED
     if not args.debug:
-        run = wandb.init(
-            project="Rec",
-            name=(
+        SWANLAB_ENABLED = True
+        swanlab.init(
+            project="MiniOneRec-SASRec",
+            experiment_name=(
                 f"{args.data}_{args.model}_emb{args.hidden_factor}_bs{args.batch_size}_lr{args.lr}_decay{args.l2_decay}_seed{args.seed}_loss_{args.loss_type}_dropout{args.dropout_rate}"
-            ),  # Set the run name directly in the `init` method
-            config={  # You can add your configuration here if needed
+            ),
+            mode=os.environ.get("SWANLAB_MODE", "local"),
+            logdir=os.environ.get("SWANLAB_LOG_DIR", "./result_temp/swanlog"),
+            config={
                 "data": args.data,
                 "model": args.model,
                 "hidden_factor": args.hidden_factor,
@@ -441,9 +448,8 @@ def main(topk, data_file_train, data_file_test, data_file_valid):
                 "loss_type": args.loss_type,
             },
         )
-        wandb.run.name = run.name
     else:
-        os.environ["WANDB_DISABLED"] = "true"
+        SWANLAB_ENABLED = False
 
 
 

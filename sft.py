@@ -25,6 +25,7 @@ from data import D3Dataset, SFTData, SidSFTDataset, SidItemFeatDataset, FusionSe
 import random
 from datasets import Dataset as HFDataset
 from torch.utils.data import ConcatDataset
+from swanlab_utils import SwanLabCallback, init_swanlab_run
 
 
 class TokenExtender:
@@ -86,7 +87,6 @@ def get_cosine_schedule_with_warmup(
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
-
 def train(
     # model/data params
     base_model: str = "",  # the only required argument
@@ -105,9 +105,10 @@ def train(
     # llm hyperparams
     group_by_length: bool = False,  # faster, but produces an odd training loss curve
     freeze_LLM: bool = False,  # freeze LLM parameters, only train new token embeddings
-    # wandb params
-    wandb_project: str = "",
-    wandb_run_name: str = "",
+    # swanlab params
+    swanlab_project: str = "MiniOneRec",
+    swanlab_run_name: str = "",
+    swanlab_mode: str = "cloud",
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     category: str="",
     train_from_scratch: bool = False,
@@ -115,7 +116,25 @@ def train(
     item_meta_path: str = "",
 ):
     set_seed(seed)
-    os.environ['WANDB_PROJECT'] = wandb_project
+    run_name = swanlab_run_name or os.path.basename(os.path.normpath(output_dir)) or "sft"
+    swanlab_log_dir = os.path.join(output_dir, "swanlog") if output_dir else "swanlog"
+    is_main_process = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))) == 0
+    init_swanlab_run(
+        project=swanlab_project,
+        run_name=run_name,
+        requested_mode=swanlab_mode,
+        default_log_dir=swanlab_log_dir,
+        config={
+            "stage": "sft",
+            "base_model": base_model,
+            "output_dir": output_dir,
+            "batch_size": batch_size,
+            "micro_batch_size": micro_batch_size,
+            "learning_rate": learning_rate,
+            "category": category,
+        },
+        is_main_process=is_main_process,
+    )
     category_dict = {"Industrial_and_Scientific": "industrial and scientific items", "Office_Products": "office products", "Toys_and_Games": "toys and games", "Sports": "sports and outdoors", "Books": "books"}
     print(category)
     category = category_dict[category]
@@ -230,7 +249,7 @@ def train(
         eval_dataset=hf_val_dataset,
         args=transformers.TrainingArguments(
             # deepspeed=deepspeed,
-            run_name=wandb_run_name,
+            run_name=run_name,
             per_device_train_batch_size=micro_batch_size,
             per_device_eval_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
@@ -249,18 +268,19 @@ def train(
             load_best_model_at_end=True,
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=group_by_length,
-            report_to=None,
+            report_to="none",
         ),
         data_collator=transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
         ),
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=3)],
+        callbacks=[SwanLabCallback(), EarlyStoppingCallback(early_stopping_patience=3)],
         # optimizers=(optimizer, lr_scheduler) 
     )
     model.config.use_cache = False
     
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
     
     output_dir = os.path.join(output_dir, "final_checkpoint")
     trainer.model.save_pretrained(output_dir)

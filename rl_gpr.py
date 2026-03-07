@@ -15,8 +15,8 @@ import math
 import json
 from sklearn.metrics import ndcg_score
 import re
+from swanlab_utils import SwanLabCallback, init_swanlab_run
 
-os.environ['WANDB_MODE'] = 'disabled'
 
 def set_seed(seed):
     random.seed(seed)
@@ -37,9 +37,10 @@ def train(
     info_file: str = "",
     category: str = "",
     
-    # wandb params
-    wandb_project: str = "",
-    wandb_run_name: str = "",
+    # swanlab params
+    swanlab_project: str = "MiniOneRec",
+    swanlab_run_name: str = "",
+    swanlab_mode: str = "cloud",
     
     # training hyperparams
     output_dir: str = "",
@@ -68,6 +69,26 @@ def train(
     dapo: bool = False,
     gspo: bool = False,
 ):
+    run_name = swanlab_run_name or os.path.basename(os.path.normpath(output_dir)) or "rl-gpr"
+    swanlab_log_dir = os.path.join(output_dir, "swanlog") if output_dir else "swanlog"
+    is_main_process = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))) == 0
+    init_swanlab_run(
+        project=swanlab_project,
+        run_name=run_name,
+        requested_mode=swanlab_mode,
+        default_log_dir=swanlab_log_dir,
+        config={
+            "stage": "rl-gpr",
+            "model_path": model_path,
+            "output_dir": output_dir,
+            "train_batch_size": train_batch_size,
+            "eval_batch_size": eval_batch_size,
+            "num_generations": num_generations,
+            "learning_rate": learning_rate,
+            "category": category,
+        },
+        is_main_process=is_main_process,
+    )
     torch.backends.cuda.enable_flash_sdp(False)  
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     set_seed(seed)
@@ -300,9 +321,6 @@ def train(
     elif reward_type == "sasrec":
         reward_fun = [cf_reward, hepo_reward] # Combine rewards
     
-    os.environ['WANDB_PROJECT'] = wandb_project
-    os.environ["WANDB_MODE"] = "offline"
-
     training_args = GRPOConfig(output_dir=output_dir,
                                 save_steps=0.1,
                                 save_total_limit=20,
@@ -325,8 +343,8 @@ def train(
                                 optim="paged_adamw_32bit",
                                 lr_scheduler_type="cosine", 
                                 save_strategy="steps",
-                                report_to="wandb",
-                                run_name=wandb_run_name,
+                                report_to="none",
+                                run_name=run_name,
                             )
     trainer = ReReTrainer(
         model=model_path,
@@ -345,11 +363,13 @@ def train(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
+        callbacks=[SwanLabCallback()],
     )
 
     trainer.train()
 
     trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
 
     output_dir = os.path.join(output_dir, "final_checkpoint")
     trainer.model.save_pretrained(output_dir)

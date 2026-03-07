@@ -2,8 +2,7 @@
 # Office_Products
 for category in "Industrial_and_Scientific"
 do
-    # your model path
-    exp_name="xxx"
+    exp_name="./output/qwen3-1.7b-base-${category}-rl"
 
     exp_name_clean=$(basename "$exp_name")
     echo "Processing category: $category with model: $exp_name_clean (STANDARD MODE)"
@@ -26,14 +25,14 @@ do
     mkdir -p "$temp_dir"
     
     echo "Splitting test data..."
-    python ./split.py --input_path "$test_file" --output_path "$temp_dir" --cuda_list "0,1,2,3,4,5,6,7"
+    python ./split.py --input_path "$test_file" --output_path "$temp_dir" --cuda_list "0,1,2,3"
     
     if [[ ! -f "$temp_dir/0.csv" ]]; then
         echo "Error: Data splitting failed for category $category"
         continue
     fi
     
-    cudalist="0 1 2 3 4 5 6 7"  
+    cudalist="0 1 2 3"  
     echo "Starting parallel evaluation (STANDARD MODE)..."
     for i in ${cudalist}
     do

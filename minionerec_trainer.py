@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import json
 import textwrap
 import warnings
 from collections import defaultdict
@@ -37,7 +38,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainerCallback,
-    is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
@@ -52,7 +52,6 @@ from trl.trainer.utils import generate_model_card, get_comet_experiment_url, pad
 import random
 
 from transformers import (
-        is_wandb_available, 
         AutoTokenizer, 
         AutoModelForCausalLM,
         TemperatureLogitsWarper, 
@@ -63,6 +62,7 @@ from transformers import (
 from LogitProcessor import ConstrainedLogitsProcessor
 from transformers.generation import LogitsProcessor
 import math
+import swanlab
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -70,8 +70,6 @@ if is_peft_available():
 # if is_vllm_available():
     # from vllm import LLM, SamplingParams
 
-if is_wandb_available():
-    import wandb
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -579,6 +577,48 @@ class ReReTrainer(Trainer):
                                                             pad_token_id=self.processing_class.pad_token_id,
                                                             eos_token_id=self.processing_class.eos_token_id,)
 
+    def _log_completion_samples(self, prompts_text, completions_text, local_rewards):
+        if not self.log_completions or self.state.global_step % self.args.logging_steps != 0:
+            return
+
+        all_prompts = gather_object(prompts_text)
+        all_completions = gather_object(completions_text)
+        all_rewards = gather_object(local_rewards.detach().cpu().tolist())
+
+        if not self.accelerator.is_main_process:
+            return
+
+        records = []
+        for prompt, completion, reward in zip(all_prompts, all_completions, all_rewards):
+            records.append(
+                {
+                    "step": self.state.global_step,
+                    "prompt": prompt,
+                    "completion": completion,
+                    "reward": float(reward),
+                }
+            )
+
+        samples_dir = os.path.join(os.environ.get("SWANLAB_LOG_DIR", os.path.join(self.args.output_dir, "swanlog")))
+        os.makedirs(samples_dir, exist_ok=True)
+        samples_path = os.path.join(samples_dir, "completion_samples.jsonl")
+        with open(samples_path, "a", encoding="utf-8") as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        preview = []
+        for record in records[:8]:
+            preview.append(
+                swanlab.Text(
+                    f"step: {record['step']}\n"
+                    f"reward: {record['reward']:.6f}\n"
+                    f"prompt:\n{record['prompt']}\n\n"
+                    f"completion:\n{record['completion']}"
+                )
+            )
+        if preview and os.environ.get("SWANLAB_ACTIVE_RUN") == "1":
+            swanlab.log({"debug/completions": preview}, step=self.state.global_step)
+
     def get_hash(self, x):
             x = [str(_) for _ in x]
             return '-'.join(x)
@@ -1000,24 +1040,7 @@ class ReReTrainer(Trainer):
                 self._metrics[f"NDCG@{topk[i]}"].append(ndcg[i])
                 self._metrics[f"HR@{topk[i]}"].append(hr[i])
 
-        if (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and "wandb" in self.args.report_to
-        ):
-            import pandas as pd
-
-            # For logging
-            table = {
-                "step": [str(self.state.global_step)] * len(rewards),
-                "prompt": gather_object(prompts_text),
-                "completion": gather_object(completions_text),
-                "reward": rewards.tolist(),
-            }
-            df = pd.DataFrame(table)
-
-            if wandb.run is not None and self.accelerator.is_main_process:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        self._log_completion_samples(prompts_text, completions_text, sliced_rewards)
 
         return {
             "prompt_ids": prompt_ids,
@@ -1142,7 +1165,7 @@ class ReReTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=None,
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
