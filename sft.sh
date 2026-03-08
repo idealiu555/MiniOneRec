@@ -1,9 +1,13 @@
+#!/bin/bash
+
 export NCCL_IB_DISABLE=1        # 完全禁用 IB/RoCE
+export OMP_NUM_THREADS=1
 SWANLAB_MODE_VALUE="${SWANLAB_MODE:-cloud}"
 
 MODEL_DIR=./Qwen/Qwen3-1.7B-Base
 if [ ! -f "${MODEL_DIR}/config.json" ]; then
-    MODEL_DIR=Qwen/Qwen3-1.7B-Base
+    echo "Missing base model at ${MODEL_DIR}. Download Qwen3-1.7B-Base there or update MODEL_DIR in sft.sh." >&2
+    exit 1
 fi
 
 # Office_Products, Industrial_and_Scientific

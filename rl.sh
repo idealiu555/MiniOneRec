@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export NCCL_IB_DISABLE=1        # 完全禁用 IB/RoCE
+export OMP_NUM_THREADS=1
 SWANLAB_MODE_VALUE="${SWANLAB_MODE:-cloud}"
 
 for category in "Industrial_and_Scientific"; do
@@ -12,6 +13,9 @@ for category in "Industrial_and_Scientific"; do
     model_path=./output/qwen3-1.7b-base-${category}-sft
     output_dir=./output/qwen3-1.7b-base-${category}-rl
     swanlab_run_name=qwen3-1.7b-base-${category}-rl
+    eval_step=0.5
+    save_step=0.5
+    save_total_limit=3
 
     HF_ENDPOINT=https://hf-mirror.com accelerate launch \
                                     --config_file ./config/zero2_opt.yaml \
@@ -27,7 +31,12 @@ for category in "Industrial_and_Scientific"; do
                         --info_file ${info_file} \
                         --category ${category} \
                         --sample_train False \
-                        --eval_step 0.0999 \
+                        --eval_step ${eval_step} \
+                        --save_step ${save_step} \
+                        --save_total_limit ${save_total_limit} \
+                        --keep_best_checkpoint True \
+                        --best_metric eval_reward \
+                        --greater_is_better True \
                         --reward_type ranking \
                         --num_generations 16 \
                         --mask_all_zero False \

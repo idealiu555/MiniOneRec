@@ -13,7 +13,6 @@ from fire import Fire
 import pickle
 import math
 import json
-from sklearn.metrics import ndcg_score
 from swanlab_utils import SwanLabCallback, init_swanlab_run
 
 
@@ -49,6 +48,11 @@ def train(
     temperature: float = 1.0,
     add_gt: bool = False,
     eval_step: float = 0.199,
+    save_step: float = -1.0,
+    save_total_limit: int = 3,
+    keep_best_checkpoint: bool = True,
+    best_metric: str = "eval_reward",
+    greater_is_better: bool = True,
     num_generations: int = 16,
     num_train_epochs: int = 1,
     learning_rate: float = 1e-6,
@@ -68,6 +72,16 @@ def train(
     dapo: bool = False,
     gspo: bool = False,
 ):
+    if save_step <= 0:
+        save_step = eval_step
+    if keep_best_checkpoint:
+        save_eval_ratio = save_step / eval_step
+        if not math.isclose(save_eval_ratio, round(save_eval_ratio), rel_tol=0.0, abs_tol=1e-8):
+            raise ValueError(
+                f"save_step ({save_step}) must be a multiple of eval_step ({eval_step}) when "
+                "keep_best_checkpoint=True."
+            )
+
     run_name = swanlab_run_name or os.path.basename(os.path.normpath(output_dir)) or "rl"
     swanlab_log_dir = os.path.join(output_dir, "swanlog") if output_dir else "swanlog"
     is_main_process = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))) == 0
@@ -82,6 +96,11 @@ def train(
             "output_dir": output_dir,
             "train_batch_size": train_batch_size,
             "eval_batch_size": eval_batch_size,
+            "eval_step": eval_step,
+            "save_step": save_step,
+            "save_total_limit": save_total_limit,
+            "keep_best_checkpoint": keep_best_checkpoint,
+            "best_metric": best_metric,
             "num_generations": num_generations,
             "learning_rate": learning_rate,
             "category": category,
@@ -278,31 +297,41 @@ def train(
     elif reward_type == "sasrec":
         reward_fun = cf_reward
     
-    training_args = GRPOConfig(output_dir=output_dir,
-                                save_steps=0.1,
-                                save_total_limit=20,
-                                eval_strategy="steps",
-                                max_completion_length=128,
-                                num_generations=num_generations,
-                                temperature=temperature,
-                                sync_ref_model=sync_ref_model,
-                                per_device_eval_batch_size=eval_batch_size,
-                                per_device_train_batch_size=train_batch_size,
-                                gradient_accumulation_steps=gradient_accumulation_steps,  
-                                eval_steps=eval_step, 
-                                logging_steps=1, 
-                                learning_rate=learning_rate,
-                                beta=beta,
-                                warmup_ratio=0.03,
-                                max_grad_norm= 0.3,
-                                num_train_epochs=num_train_epochs,
-                                bf16=True,
-                                optim="paged_adamw_32bit",
-                                lr_scheduler_type="cosine", 
-                                save_strategy="steps",
-                                report_to="none",
-                                run_name=run_name,
-                            )
+    training_args_kwargs = {
+        "output_dir": output_dir,
+        "save_steps": save_step,
+        "save_total_limit": save_total_limit,
+        "eval_strategy": "steps",
+        "max_completion_length": 128,
+        "num_generations": num_generations,
+        "temperature": temperature,
+        "sync_ref_model": sync_ref_model,
+        "per_device_eval_batch_size": eval_batch_size,
+        "per_device_train_batch_size": train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "eval_steps": eval_step,
+        "logging_steps": 1,
+        "learning_rate": learning_rate,
+        "beta": beta,
+        "warmup_ratio": 0.03,
+        "max_grad_norm": 0.3,
+        "num_train_epochs": num_train_epochs,
+        "bf16": True,
+        "optim": "paged_adamw_32bit",
+        "lr_scheduler_type": "cosine",
+        "save_strategy": "steps",
+        "report_to": "none",
+        "run_name": run_name,
+    }
+    if keep_best_checkpoint:
+        training_args_kwargs.update(
+            {
+                "load_best_model_at_end": True,
+                "metric_for_best_model": best_metric,
+                "greater_is_better": greater_is_better,
+            }
+        )
+    training_args = GRPOConfig(**training_args_kwargs)
     trainer = ReReTrainer(
         model=model_path,
         base_model=model_path,
@@ -324,6 +353,8 @@ def train(
     )
 
     trainer.train()
+    if trainer.state.best_model_checkpoint:
+        print(f"Best RL checkpoint: {trainer.state.best_model_checkpoint} ({best_metric})")
 
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)

@@ -20,6 +20,7 @@ def init_swanlab_run(
     if requested_mode == "cloud" and env_mode:
         requested_mode = env_mode
     log_dir = os.environ.get("SWANLAB_LOG_DIR", default_log_dir)
+    os.makedirs(log_dir, exist_ok=True)
     os.environ["SWANLAB_MODE"] = requested_mode
     os.environ["SWANLAB_LOG_DIR"] = log_dir
     os.environ["SWANLAB_ACTIVE_RUN"] = "0"
