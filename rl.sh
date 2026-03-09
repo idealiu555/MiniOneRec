@@ -13,9 +13,9 @@ for category in "Industrial_and_Scientific"; do
     model_path=./output/qwen3-1.7b-base-${category}-sft
     output_dir=./output/qwen3-1.7b-base-${category}-rl
     swanlab_run_name=qwen3-1.7b-base-${category}-rl
-    eval_step=0.5
-    save_step=0.5
-    save_total_limit=3
+    eval_step=0.0999
+    save_step=0.0999
+    save_total_limit=5
 
     HF_ENDPOINT=https://hf-mirror.com accelerate launch \
                                     --config_file ./config/zero2_opt.yaml \

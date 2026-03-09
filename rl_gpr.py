@@ -50,7 +50,7 @@ def train(
     add_gt: bool = False,
     eval_step: float = 0.199,
     save_step: float = -1.0,
-    save_total_limit: int = 3,
+    save_total_limit: int = 5,
     keep_best_checkpoint: bool = True,
     best_metric: str = "eval_reward",
     greater_is_better: bool = True,
